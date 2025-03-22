@@ -9,15 +9,15 @@
   (testing "a defined function"
     (is (= (ck/class->ruby-constant
             (class whatever-dude))
-            "Cljdekiq::CoreTest::WhateverDude"))
+           "Cljdekiq::CoreTest::WhateverDude"))
 
     (is (= (ck/class->ruby-constant
             (class clojure.string/split))
-            "Clojure::String::Split"))
+           "Clojure::String::Split"))
 
     (is (= (ck/class->ruby-constant
             (class test))
-            "Clojure::Core::Test")))
+           "Clojure::Core::Test")))
 
   (testing "a java class"
     (is (= (ck/class->ruby-constant IllegalArgumentException)
@@ -25,10 +25,10 @@
 
   (testing "that an anonymous function throws an exception"
     (is (thrown-with-msg?
-          IllegalArgumentException
-          #"Cannot convert an anonymous function to a ruby constant name: cljdekiq\.core_test\$fn__"
-          (ck/class->ruby-constant
-            (class (fn [] :not-used)))))))
+         IllegalArgumentException
+         #"Cannot convert an anonymous function to a ruby constant name: cljdekiq\.core_test\$fn__"
+         (ck/class->ruby-constant
+          (class (fn [] :not-used)))))))
 
 (deftest it-can-build-a-worker
   (testing "function with default arguments"
@@ -60,7 +60,7 @@
             :job-fn whatever-dude})))
 
   (testing "anonymous function with custom class name"
-    (let [anon-fn (fn [] )]
+    (let [anon-fn (fn [])]
       (is (= (ck/worker anon-fn :as "IKnowBetterWorker")
              {:class-name "IKnowBetterWorker"
               :retries 25
@@ -76,9 +76,9 @@
 
   (testing "anonymous function without a custom class name"
     (is (thrown-with-msg?
-          IllegalArgumentException
-          #"Cannot convert an anonymous function to a ruby constant name: cljdekiq\.core_test\$fn__"
-          (ck/worker (fn []))))))
+         IllegalArgumentException
+         #"Cannot convert an anonymous function to a ruby constant name: cljdekiq\.core_test\$fn__"
+         (ck/worker (fn []))))))
 
 (deftest it-can-merge-new-worker-options
   (def whatever-worker
@@ -117,6 +117,6 @@
 
   (testing "missing job-fn from a worker map"
     (is (thrown-with-msg?
-          IllegalArgumentException
-          #"Cannot register worker because it's missing a job-fn\. Is this a ref-only worker\?"
-          (ck/register a-conn (ck/worker "NoJobFnWorker"))))))
+         IllegalArgumentException
+         #"Cannot register worker because it's missing a job-fn\. Is this a ref-only worker\?"
+         (ck/register a-conn (ck/worker "NoJobFnWorker"))))))

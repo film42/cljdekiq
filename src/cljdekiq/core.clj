@@ -83,7 +83,7 @@
         var-like (clojure.string/replace name "$" "/")]
     (when (clojure.string/includes? name "$fn__")
       (throw (IllegalArgumentException.
-               (str "Cannot convert an anonymous function to a ruby constant name: " name))))
+              (str "Cannot convert an anonymous function to a ruby constant name: " name))))
 
     (let [parts (clojure.string/split var-like #"/")
 
@@ -99,11 +99,8 @@
 
       ; Combine namespace and name
       (clojure.string/join
-        "::"
-        (remove nil? (conj ns-parts ruby-name))))))
-
-
-
+       "::"
+       (remove nil? (conj ns-parts ruby-name))))))
 
 (defn conn
   ;; Automatically create a redis pool using localhost.
@@ -120,11 +117,11 @@
   (let [options (or options {})
         class-name (or
                      ;; Check for a user provided class name
-                     (:as options)
+                    (:as options)
                      ;; Check for a string constant (not callable name)
-                     (if (string? name-or-fn) name-or-fn)
+                    (if (string? name-or-fn) name-or-fn)
                      ;; Generate a ruby-like constant from the fn's name.
-                     (class->ruby-constant (class name-or-fn)))
+                    (class->ruby-constant (class name-or-fn)))
         retries (if  (nil? (:retry options))
                   ;; Default retry count is 25.
                   25
@@ -142,17 +139,17 @@
   (let [options (or options {})
         worker (or
                  ;; See if we need to derive some worker opts
-                 (if (fn? worker-or-fn) (worker worker-or-fn options))
+                (if (fn? worker-or-fn) (worker worker-or-fn options))
 
                  ;; Use the provided worker map.
-                 worker-or-fn)
+                worker-or-fn)
 
         ;; Let the caller pass in some overrides. We'll normalize
         ;; and then merge them into the worker map.
         new-opts (->
-                   options
-                   (clojure.set/rename-keys {:as :class-name})
-                   (select-keys [:class-name :retries :queue]))
+                  options
+                  (clojure.set/rename-keys {:as :class-name})
+                  (select-keys [:class-name :retries :queue]))
         new-worker (merge worker new-opts)]
 
     new-worker))
@@ -166,7 +163,7 @@
     ;; a worker without a fn.
     (if (nil? (:job-fn worker))
       (throw (IllegalArgumentException.
-               (str "Cannot register worker because it's missing a job-fn. Is this a ref-only worker?"))))
+              (str "Cannot register worker because it's missing a job-fn. Is this a ref-only worker?"))))
 
     ;; Update the conn state.
     (assoc conn :workers (conj workers worker))))
@@ -176,23 +173,21 @@
         ;; This looks like (brpop :q1 :q2 :q3 5) when eval'd
         (apply car/brpop (conj queues 5))))
 
-
 (defn push-job [conn job]
   (wcar (:reds conn)
         (car/lpush
           ;; Set the work queue from job or use default.
-          (or (:queue job) :default)
-          (json/write-str job))))
-
+         (or (:queue job) :default)
+         (json/write-str job))))
 
 ;; Assumed retries are allowed to happen if called.
 (defn -retry [conn job err]
   (let [retry (:retry job)
         max-retries (or
                       ;; Check for a specified number
-                      (if (int? retry) retry)
+                     (if (int? retry) retry)
                       ;; Check for a "true" value so we can use default.
-                      (if (boolean? retry) 25))
+                     (if (boolean? retry) 25))
 
         ;; Check number of times job has retries so far.
         retry-count (or (:retry_count job) 0)
@@ -231,7 +226,6 @@
           (if (:retry job)
             (-retry conn job e)))))))
 
-
 (defn -poll-once [conn queues class-to-worker]
   (let [[queue job-data] (poll-for-work conn queues)
         job (if (string? job-data)
@@ -249,13 +243,12 @@
       (-invoke conn worker job)
       (println "Skipping because there is no worker defined with class name: " (:class job)))))
 
-
 (defn -spawn-worker [conn]
   (let [queues (->> (:workers conn) (map :queue) set (into []))
         class-to-worker (->>
-                          (:workers conn)
-                          (map (fn [w] {(:class-name w) w}))
-                          (into {}))
+                         (:workers conn)
+                         (map (fn [w] {(:class-name w) w}))
+                         (into {}))
 
         ;; Spawn future to compute work until asked to stop.
         running (atom true)
@@ -295,8 +288,6 @@
 
     (push-job conn job-map)))
 
-
-
 (comment
   ;; Server
 
@@ -314,75 +305,62 @@
 
   (def demo-proc
     (->
-      (conn)
+     (conn)
 
       ;; Register your number function to jobs in the mailers queue.
-      (register send-email :queue :mailers :not-used true)
+     (register send-email :queue :mailers :not-used true)
 
       ;; Register _any_ function!
-      (register println)
+     (register println)
 
       ;(register create-subscription-worker :retries false)
 
       ;(register create-subscription-worker :queue :test )
 
       ;; You can even pick up work from a legacy ruby app.
-      (register some-ruby-fn :as "Legacy::V3::SomeWorker")))
+     (register some-ruby-fn :as "Legacy::V3::SomeWorker")))
 
   (dotimes [i 1000]
-    (perform-async demo-proc send-email 123)
-    )
-
+    (perform-async demo-proc send-email 123))
 
   (->
-    (ck/processor)
+   (ck/processor)
 
     ;; Register your number function to jobs in the mailers queue.
-    (ck/register send-email :queue :mailers)
+   (ck/register send-email :queue :mailers)
 
     ;; Register _any_ function!
-    (ck/register println)
+   (ck/register println)
 
     ;; You can even pick up work from a legacy ruby app.
-    (ck/register some-ruby-fn :as "Legacy::V3::SomeWorker")
+   (ck/register some-ruby-fn :as "Legacy::V3::SomeWorker")
 
     ;; Start your server.
-    (ck/run)
+   (ck/run)
 
     ;; Do something with the future returned by the server.
-    (deref))
+   (deref))
 
   ;; Client
 
   (ck/perform-async
-    (ck/processor)
-    (ck/job some-ruby-fn :queue :mailers) "user-1234")
+   (ck/processor)
+   (ck/job some-ruby-fn :queue :mailers) "user-1234")
 
   (def report-sync-job
     (ck/job "V2::ReportWorker" :queue :mailer))
 
   (ck/perform-async conn report-sync-job "usr-123")
 
+  (ck/perform-async
+   (ck/processor)
+   "V2:UserReportWorker"
+   (ck/job some-ruby-fn :queue :mailers) "user-1234")
 
   (ck/perform-async
-    (ck/processor)
-    "V2:UserReportWorker"
-    (ck/job some-ruby-fn :queue :mailers) "user-1234")
-
-  (ck/perform-async
-    (ck/processor)
-    println
-    "user-1234" "whatever you want")
-
-
-
-
-
-
-
-
-
-
+   (ck/processor)
+   println
+   "user-1234" "whatever you want")
 
   (deftype UserMailerJob [db]
     Job
@@ -391,17 +369,16 @@
 
   (def server
     (->
-      (kq/processor)
+     (kq/processor)
 
-      (->
-        (kq/queue :nasty-girl)
-        (kq/register send-email)
-        (kq/register sync-stripe :as "ScottLeune::StripeSyncJob"))
-
+     (->
+      (kq/queue :nasty-girl)
       (kq/register send-email)
-      (kq/register send-email :as "MyDeep::AppWorker")
-      (kq/register send-email :as "MyClass" :queue :nasty-girl)
-      ))
+      (kq/register sync-stripe :as "ScottLeune::StripeSyncJob"))
+
+     (kq/register send-email)
+     (kq/register send-email :as "MyDeep::AppWorker")
+     (kq/register send-email :as "MyClass" :queue :nasty-girl)))
 
   (kq/perform "UserMailerWorker")
   (kq/perform "UserMailerWorker" 1)
@@ -412,10 +389,7 @@
   (kq/perform send-email "usr-123")
 
   (kq/perform send-email ["usr-123", 2]
-              (kq/opts { :queue :rabbit :retries false }))
-
+              (kq/opts {:queue :rabbit :retries false}))
 
   (kq/perform '(send-email "usr-123")
-              (kq/opts { :queue :rabbit :retries false }))
-
-)
+              (kq/opts {:queue :rabbit :retries false})))
