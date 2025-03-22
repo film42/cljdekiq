@@ -25,23 +25,22 @@
 (defn -now []
   (long (/ (System/currentTimeMillis) 1000)))
 
-
-(defn constant-to-kebab [ruby-constant]
-  (let [kebab-case (->> ruby-constant
-                        (re-seq #"[A-Z][a-z0-9]*")
-                        (map clojure.string/lower-case)
-                        (clojure.string/join "-"))]
-    kebab-case))
-
-(defn ruby-constant->var [rb]
-  (let [parts (clojure.string/split rb #"::")
-        ns-parts (map constant-to-kebab (drop-last parts))
-        fn-parts (list (constant-to-kebab (last parts)))
-        var-str (clojure.string/join "/"
-                                     (list (clojure.string/join "." ns-parts)
-                                           (clojure.string/join "" fn-parts)))]
-    (resolve (symbol var-str))))
-
+;; (defn constant-to-kebab [ruby-constant]
+;;   (let [kebab-case (->> ruby-constant
+;;                         (re-seq #"[A-Z][a-z0-9]*")
+;;                         (map clojure.string/lower-case)
+;;                         (clojure.string/join "-"))]
+;;     kebab-case))
+;;
+;; (defn ruby-constant->var [rb]
+;;   (let [parts (clojure.string/split rb #"::")
+;;         ns-parts (map constant-to-kebab (drop-last parts))
+;;         fn-parts (list (constant-to-kebab (last parts)))
+;;         var-str (clojure.string/join "/"
+;;                                      (list (clojure.string/join "." ns-parts)
+;;                                            (clojure.string/join "" fn-parts)))]
+;;     (resolve (symbol var-str))))
+;;
 
 ;; (defprotocol Job
 ;;   (perform [this & args ] "Perform some work"))
@@ -64,6 +63,20 @@
 ;;   (if (string? n)
 ;;     n
 ;;     (symbol :idk )))
+(defn capitalized? [s]
+  (let [s1 (str (first s))
+        s1-cap (clojure.string/capitalize s1)]
+    (= s1 s1-cap)))
+
+(defn constantize [s]
+  (->> (clojure.string/split (str s) #"-|_")
+       (map (fn [s1]
+              ;; Java classes might already be titleized. We should
+              ;; check to see if formatting is required.
+              (if (capitalized? s1)
+                s1
+                (clojure.string/capitalize s1))))
+       clojure.string/join))
 
 (defn class->ruby-constant [c]
   (let [name (.getName c)
@@ -73,24 +86,23 @@
                (str "Cannot convert an anonymous function to a ruby constant name: " name))))
 
     (let [parts (clojure.string/split var-like #"/")
-          fn-name (last parts)
-          ns-name (first parts)
+
+          ; Constantize the fn name to look like ruby.
+          ; We can skip this operation if the parts vec size is one.
+          ; Java classes don't include a $ or / in the name, but it
+          ; still looks like a valid clojure ns, so skip this part.
+          ruby-name (if (> (count parts) 1) (constantize (last parts)))
 
           ; Transform namespace segments (split by dots, capitalize each)
-          ns-parts (map #(str (Character/toUpperCase (first %)) (subs % 1))
-                        (clojure.string/split ns-name #"\."))
-
-          ; Transform var name (replace hyphens with underscores, capitalize each part)
-          fn-parts (map #(str (Character/toUpperCase (first %)) (subs % 1))
-                        (clojure.string/split fn-name #"-"))
-
-
-          ; Join namespace with double colons, join var parts with nothing
-          ruby-ns (clojure.string/join "::" ns-parts)
-          ruby-name (clojure.string/join "" fn-parts)]
+          ns-name (first parts)
+          ns-parts (vec (map constantize (clojure.string/split ns-name #"\.")))]
 
       ; Combine namespace and name
-      (str ruby-ns "::" ruby-name))))
+      (clojure.string/join
+        "::"
+        (remove nil? (conj ns-parts ruby-name))))))
+
+
 
 
 (defn conn
@@ -113,10 +125,13 @@
                      (if (string? name-or-fn) name-or-fn)
                      ;; Generate a ruby-like constant from the fn's name.
                      (class->ruby-constant (class name-or-fn)))
-
-          retries (or (:retry options) 25)
-          queue (or (:queue options) :default)
-          job-fn (if (fn? name-or-fn) name-or-fn)]
+        retries (if  (nil? (:retry options))
+                  ;; Default retry count is 25.
+                  25
+                  ;; Any number or false is also valid.
+                  (:retry options))
+        queue (or (:queue options) :default)
+        job-fn (if (fn? name-or-fn) name-or-fn)]
 
     {:class-name class-name
      :retries retries
@@ -201,8 +216,6 @@
     (if (< retry-count max-retries)
       (push-job conn new-job))))
 
-
-
 (defn -invoke [conn worker job]
   (let [job-fn (:job-fn worker)
         args (:args job)]
@@ -216,8 +229,7 @@
 
           ;; Retry according to the job state, not the worker
           (if (:retry job)
-            (-retry conn job e)))
-  ))))
+            (-retry conn job e)))))))
 
 
 (defn -poll-once [conn queues class-to-worker]
@@ -227,15 +239,15 @@
               (json/read-str job-data :key-fn keyword))
         worker (get class-to-worker (:class job))]
 
-    (clojure.pprint/pprint job-data)
-    (clojure.pprint/pprint queue)
-    (clojure.pprint/pprint job)
-    (clojure.pprint/pprint worker)
+    (comment
+      (clojure.pprint/pprint job-data)
+      (clojure.pprint/pprint queue)
+      (clojure.pprint/pprint job)
+      (clojure.pprint/pprint worker))
 
     (if (not (nil? worker))
       (-invoke conn worker job)
-      (println "Skipping because there is no worker defined with class name: " (:class job)))
-    ))
+      (println "Skipping because there is no worker defined with class name: " (:class job)))))
 
 
 (defn -spawn-worker [conn]
@@ -281,83 +293,12 @@
                  :created_at (-now)
                  :enqueued_at (-now)}]
 
-    ; (println (json/write-str job-map))
-
     (push-job conn job-map)))
 
-;;(defmacro worker [name-or-fn & {:as options}]
-;;  `(let [options# (or ~options {})
-;;        ;; TODO: I'm sure there is a better way to thread fn->var->str or str
-;;        class-name# (cond
-;;                     ;; Check for a string literal of the class name.
-;;                     (string? ~name-or-fn)
-;;                     ~name-or-fn
-;;
-;;                     ;; Check for a var of the function.
-;;                     (var? ~name-or-fn)
-;;                     (var->ruby-constant ~name-or-fn)
-;;
-;;                     ;; Check for a function.
-;;                     (fn? ~name-or-fn)
-;;                     (var->ruby-constant (var ~name-or-fn))
-;;
-;;                     ;; Nobody can help you with your problems.
-;;                     :else
-;;                     (throw (IllegalArgumentException.
-;;                              (str "Expected var of function, string, or function, got: "
-;;                                   (type ~name-or-fn)))))
-;;
-;;          retries# (or (:retry ~options) 25)
-;;          queue# (or (:queue ~options) :default)
-;;          job-fn# (if (fn? ~name-or-fn) ~name-or-fn nil)]
-;;
-;;    {:class-name class-name#
-;;     :retries retries#
-;;     :queue queue#
-;;     :job-fn job-fn#}))
-
-
-;; (defn keep-or-set
-;;   "Helper function that keeps the existing value if present, otherwise uses new value"
-;;   [_map _key new-val]
-;;   (update _map _key #(if % % new-val)))
-;;
-;; (defmacro register
-;;   "Register a job function. Allow for overwriting :as for class name, :queue for queue, :retry for max retries"
-;;   ([proc job-fn & {:as options}]
-;;    `(let [options# (or ~options {})
-;;           class-name# (or (:as ~options) (var->ruby-constant (var ~job-fn)))
-;;           retries# (or (:retry ~options) 25)
-;;           queue# (or (:queue ~options) :default)]
-;;       (assoc ~proc :workers
-;;              (conj (:workers ~proc)
-;;                    {:class-name class-name#
-;;                     :retries retries#
-;;                     :queue queue#
-;;                     :job-fn ~job-fn})))))
 
 
 (comment
   ;; Server
-
-  (defonce conn-pool (car/connection-pool {}))
-  (def     conn-spec {:uri "redis://localhost:6379/"})
-  (def     wcar-opts {:pool conn-pool, :spec conn-spec})
-
-;;  (defmacro wcar* [& body]
-;;    `(car/wcar wcar-opts ~@body))
-;;
-;;  (wcar*
-;;    (car/brpop [:default :yolo] 5))
-
-
-  (wcar wcar-opts
-        (apply
-         car/brpop
-          (conj
-            (into [] (set '(:mailers :default :default)))
-            4)
-          ))
 
   (defn send-email [user-id]
     (do
@@ -367,8 +308,6 @@
 
   (defn some-ruby-fn [id]
     (println [:email id]))
-
-  ;(require 'cljdekiq.core :as ck)
 
   (def create-subscription-worker
     (worker "CreateSubscriptionWorker" :queue :web))
@@ -480,8 +419,3 @@
               (kq/opts { :queue :rabbit :retries false }))
 
 )
-
-(defn foo
-  "I don't do a whole lot."
-  [x]
-  (println x "Hello, World!"))
