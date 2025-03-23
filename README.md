@@ -6,6 +6,22 @@ A Clojure library designed to ... well, that part is up to you.
 
 FIXME
 
+### Tasks
+
+1. Abstract redis
+2. Add sidekiq-rs optimizations
+3. Middleware
+4. Using `core.async` maybe
+5. Sidekiq-rs crons
+6. Dynamo/Firestore/Postgres backend
+
+### TODO
+
+1. Better error handling on json deserializing
+2. Can we have shutdown support `(stop :timeout n-secs)`
+3. Should we rotate the queue order on `brpop`?
+4. How do folks use loggers with clojure?
+
 ## License
 
 Copyright © 2025 FIXME

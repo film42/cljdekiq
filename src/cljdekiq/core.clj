@@ -2,67 +2,15 @@
   (:require [taoensso.carmine :as car :refer [wcar]]
             [clojure.data.json :as json]))
 
-;;(defn var->ruby-constant [v]
-;;  (let [var-meta (meta v)
-;;        ns-name (str (:ns var-meta))  ; Get namespace as string
-;;        var-name (name (:name var-meta))  ; Get var name
-;;
-;;        ; Transform namespace segments (split by dots, capitalize each)
-;;        ns-parts (map #(str (Character/toUpperCase (first %)) (subs % 1))
-;;                       (clojure.string/split ns-name #"\."))
-;;
-;;        ; Transform var name (replace hyphens with underscores, capitalize each part)
-;;        var-parts (map #(str (Character/toUpperCase (first %)) (subs % 1))
-;;                        (clojure.string/split var-name #"-"))
-;;
-;;        ; Join namespace with double colons, join var parts with nothing
-;;        ruby-ns (clojure.string/join "::" ns-parts)
-;;        ruby-name (clojure.string/join "" var-parts)]
-;;
-;;    ; Combine namespace and name
-;;    (str ruby-ns "::" ruby-name)))
-
+;; Time helpers
+(defn seconds [n] (long n))
+(defn minutes [n] (long (* n 60)))
+(defn hours [n] (long (* (minutes n) 60)))
+(defn days [n] (long (* (hours n) 24)))
 (defn -now []
   (long (/ (System/currentTimeMillis) 1000)))
 
-;; (defn constant-to-kebab [ruby-constant]
-;;   (let [kebab-case (->> ruby-constant
-;;                         (re-seq #"[A-Z][a-z0-9]*")
-;;                         (map clojure.string/lower-case)
-;;                         (clojure.string/join "-"))]
-;;     kebab-case))
-;;
-;; (defn ruby-constant->var [rb]
-;;   (let [parts (clojure.string/split rb #"::")
-;;         ns-parts (map constant-to-kebab (drop-last parts))
-;;         fn-parts (list (constant-to-kebab (last parts)))
-;;         var-str (clojure.string/join "/"
-;;                                      (list (clojure.string/join "." ns-parts)
-;;                                            (clojure.string/join "" fn-parts)))]
-;;     (resolve (symbol var-str))))
-;;
-
-;; (defprotocol Job
-;;   (perform [this & args ] "Perform some work"))
-;;
-;; (defn into-job [f]
-;;   (if (satisfies? Job f)
-;;     f
-;;     (reify Job
-;;       (perform [this & args]
-;;         (apply f args)))))
-;;
-;; (defn perform
-;;   ([f] (perform f []))
-;;
-;;   ([f & args]
-;;    (-> f into-job (apply args))))
-;;
-;;
-;; (defn clj->rb [n]
-;;   (if (string? n)
-;;     n
-;;     (symbol :idk )))
+;; String heleprs
 (defn capitalized? [s]
   (let [s1 (str (first s))
         s1-cap (clojure.string/capitalize s1)]
@@ -180,6 +128,26 @@
          (or (:queue job) :default)
          (json/write-str job))))
 
+(defn push-schedule [conn job enqueue-at]
+  (wcar (:reds conn)
+        (car/zadd
+         :schedule
+         enqueue-at
+         (json/write-str job))))
+
+(defn push-retry [conn job retry-at]
+  (wcar (:reds conn)
+        (car/zadd
+         :retry
+         retry-at
+         (json/write-str job))))
+
+(defn -retry-delay-secs [n]
+  (+ (Math/pow n 4)
+     15
+     (* (+ (rand-int 30) 0)
+        (+ n 1))))
+
 ;; Assumed retries are allowed to happen if called.
 (defn -retry [conn job err]
   (let [retry (:retry job)
@@ -205,11 +173,46 @@
                        :retried_at (-now)
                        :error_message err-msg
                        :error_class err-class
-                       :error_backtrace err-stacktrace)]
+                       :error_backtrace err-stacktrace)
+
+        ;; Compute the time we'll retry the job.
+        retry-at (+ (-now)
+                    (-retry-delay-secs (inc retry-count)))]
 
     ;; Insert the job if the max retries have not exceeded.
     (if (< retry-count max-retries)
-      (push-job conn new-job))))
+      (push-retry conn new-job retry-at))))
+
+(defn -enqueue-scheduled [conn key]
+  (let [items (wcar (:redis conn)
+                    (car/zrangebyscore key "-inf" (-now) "limit" 0 10))]
+
+    ;; We have a list of items that we need to delete from the range and
+    ;; re-enqueue to run immediately.
+    (doseq [item items]
+      (let [n-removed (wcar (:redis conn) (car/zrem key item))
+            job (json/read-str item :key-fn keyword)]
+
+        ;; Rely on ZREM to tell us if we're the lucky proc that actually
+        ;; removed it from redis. If so, then add. Else, skip.
+        (if (not (zero? n-removed))
+          (push-job conn job))))))
+
+;;(defn -enqueue-retries [conn]
+;;  (let [
+;;        retries (wcar (:redis conn)
+;;                      (car/zrangebyscore :retry "-inf" (-now) "limit" 0 10))]
+;;
+;;    ;; We have a list of items that we need to delete from the range and
+;;    ;; re-enqueue to run immediately.
+;;    (doseq [retry retries]
+;;      (let [n-removed (wcar (:redis conn) (car/zrem :retry retry))
+;;            job (json/read-str retry :key-fn keyword)]
+;;
+;;        ;; Rely on ZREM to tell us if we're the lucky proc that actually
+;;        ;; removed it from redis. If so, then add. Else, skip.
+;;        (if (not (zero? n-removed))
+;;          (push-job conn job))))))
 
 (defn -invoke [conn worker job]
   (let [job-fn (:job-fn worker)
@@ -241,28 +244,69 @@
 
     (if (not (nil? worker))
       (-invoke conn worker job)
-      (println "Skipping because there is no worker defined with class name: " (:class job)))))
 
-(defn -spawn-worker [conn]
-  (let [queues (->> (:workers conn) (map :queue) set (into []))
-        class-to-worker (->>
-                         (:workers conn)
-                         (map (fn [w] {(:class-name w) w}))
-                         (into {}))
+      ;; Only log about unknown jobs if the job itself is nil.
+      (if (not (nil? job))
+        (println "Skipping because there is no worker defined with class name: " (:class job))))))
 
+(defn -spawn-fn [f]
+  (let [running (atom true)
         ;; Spawn future to compute work until asked to stop.
-        running (atom true)
+        ;; Maybe we should make the f decide on while?
         task (future
-               (while @running
-                 (-poll-once conn queues class-to-worker)))]
+               (while @running (f)))]
 
     ;; Return a stopping function.
     (fn []
       (reset! running false)
       @task)))
 
+(defn -poll-queues [conn]
+  (let [queues (->> (:workers conn) (map :queue) set (into []))
+        class-to-worker (->>
+                         (:workers conn)
+                         (map (fn [w] {(:class-name w) w}))
+                         (into {}))]
+    (fn []
+      (-poll-once conn queues class-to-worker))))
+
+;; (defn -spawn-worker [conn]
+;;   (let [queues (->> (:workers conn) (map :queue) set (into []))
+;;         class-to-worker (->>
+;;                          (:workers conn)
+;;                          (map (fn [w] {(:class-name w) w}))
+;;                          (into {}))
+;;
+;;         ;; Spawn future to compute work until asked to stop.
+;;         running (atom true)
+;;         task (future
+;;                (while @running
+;;                  (-poll-once conn queues class-to-worker)))]
+;;
+;;     ;; Return a stopping function.
+;;     (fn []
+;;       (reset! running false)
+;;
+;;       ;; TODO: Consider returning non-deref so that you can concurrently
+;;       ;; send stop signals and then aways one-by-one.
+;;       @task)))
+
 (defn run [conn]
-  (let [workers [(-spawn-worker conn)]]
+  (let [poll-retries (fn []
+                       ;; Move jobs in the retry set.
+                       (-enqueue-scheduled conn :retry)
+                       ;; Move jobs in the schedule set.
+                       (-enqueue-scheduled conn :schedule)
+                       ;; Sleep a bit to avoid churn on redis.
+                       (Thread/sleep 5000))
+        ;; Build a fn to poll queues. Memo conn state for fast lookups.
+        poll-queues  (-poll-queues conn)
+
+        ;; Spawn workers
+        workers [(-spawn-fn poll-queues)
+                 (-spawn-fn poll-retries)]]
+
+    ;; Return a new (stop) function that stops all other stop functions.
     (fn []
       (doseq [stop-fn workers]
         (stop-fn)))))
@@ -275,18 +319,25 @@
            (for [b random-bytes]
              (format "%02x" (bit-and b 0xff))))))
 
-(defn perform-async [conn worker-or-fn & args]
+(defn new-job [worker-or-fn & args]
   (let [worker (merge-worker worker-or-fn {})
         job-map {:class (:class-name worker)
                  :queue (or (:queue worker) :default)
                  :jid (-jid)
-                 :args args
+                 :args (or args [])
                  :retry (or (:retries worker) true)
                  :retry_count 0
                  :created_at (-now)
                  :enqueued_at (-now)}]
+    job-map))
 
-    (push-job conn job-map)))
+(defn perform-async [conn worker-or-fn & args]
+  (push-job conn (apply new-job worker-or-fn args)))
+
+(defn perform-in [conn worker-or-fn seconds & args]
+  (push-schedule conn
+                 (apply new-job worker-or-fn args)
+                 (+ (-now) seconds)))
 
 (comment
   ;; Server
@@ -321,7 +372,11 @@
      (register some-ruby-fn :as "Legacy::V3::SomeWorker")))
 
   (dotimes [i 1000]
-    (perform-async demo-proc send-email 123))
+
+    (perform-async demo-proc send-email 123)
+
+    ;; I don't love this interface. The duration is kind of hard to see.
+    (perform-in demo-proc send-email (seconds 5) 999))
 
   (->
    (ck/processor)
