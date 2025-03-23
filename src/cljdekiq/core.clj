@@ -291,20 +291,25 @@
 ;;       ;; send stop signals and then aways one-by-one.
 ;;       @task)))
 
-(defn run [conn]
-  (let [poll-retries (fn []
-                       ;; Move jobs in the retry set.
-                       (-enqueue-scheduled conn :retry)
-                       ;; Move jobs in the schedule set.
-                       (-enqueue-scheduled conn :schedule)
-                       ;; Sleep a bit to avoid churn on redis.
-                       (Thread/sleep 5000))
+(defn run [conn & {:as options}]
+  (let [options (or options {})
+        num-workers (or (:workers options) 4)
+
+        ;; Build a fn for polling the retry and schedule sets.
+        poll-sets (fn []
+                    ;; Move jobs in the retry set.
+                    (-enqueue-scheduled conn :retry)
+                    ;; Move jobs in the schedule set.
+                    (-enqueue-scheduled conn :schedule)
+                    ;; Sleep a bit to avoid churn on redis.
+                    (Thread/sleep 5000))
         ;; Build a fn to poll queues. Memo conn state for fast lookups.
-        poll-queues  (-poll-queues conn)
+        poll-queues (-poll-queues conn)
 
         ;; Spawn workers
-        workers [(-spawn-fn poll-queues)
-                 (-spawn-fn poll-retries)]]
+        workers (conj
+                 (repeatedly num-workers #(-spawn-fn poll-queues))
+                 (-spawn-fn poll-sets))]
 
     ;; Return a new (stop) function that stops all other stop functions.
     (fn []
