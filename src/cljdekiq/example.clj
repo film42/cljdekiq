@@ -43,8 +43,8 @@
 
   (ck/perform-in app anon-worker (ck/seconds 6) 1 2 3)
 
-  (println "Running server for 60 seconds.")
-  (Thread/sleep 60000)
+  (println "Running server for 5 seconds.")
+  (Thread/sleep 5000)
 
   (println "Shutting down...")
   (stop)

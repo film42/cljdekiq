@@ -256,10 +256,11 @@
         task (future
                (while @running (f)))]
 
-    ;; Return a stopping function.
+    ;; Return a stopping function. The stopping function returns the underlying
+    ;; future so you can serially wait or broadcast "stop" before waiting.
     (fn []
       (reset! running false)
-      @task)))
+      task)))
 
 (defn -poll-queues [conn]
   (let [queues (->> (:workers conn) (map :queue) set (into []))
@@ -269,27 +270,6 @@
                          (into {}))]
     (fn []
       (-poll-once conn queues class-to-worker))))
-
-;; (defn -spawn-worker [conn]
-;;   (let [queues (->> (:workers conn) (map :queue) set (into []))
-;;         class-to-worker (->>
-;;                          (:workers conn)
-;;                          (map (fn [w] {(:class-name w) w}))
-;;                          (into {}))
-;;
-;;         ;; Spawn future to compute work until asked to stop.
-;;         running (atom true)
-;;         task (future
-;;                (while @running
-;;                  (-poll-once conn queues class-to-worker)))]
-;;
-;;     ;; Return a stopping function.
-;;     (fn []
-;;       (reset! running false)
-;;
-;;       ;; TODO: Consider returning non-deref so that you can concurrently
-;;       ;; send stop signals and then aways one-by-one.
-;;       @task)))
 
 (defn run [conn & {:as options}]
   (let [options (or options {})
@@ -313,8 +293,10 @@
 
     ;; Return a new (stop) function that stops all other stop functions.
     (fn []
-      (doseq [stop-fn workers]
-        (stop-fn)))))
+      (->> workers
+           ;; We _must_ use (mapv) here because it is non-lazy.
+           (mapv #(%))
+           (mapv deref)))))
 
 (defn -jid []
   (let [random-bytes (byte-array 12)
