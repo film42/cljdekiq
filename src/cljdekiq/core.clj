@@ -1,14 +1,12 @@
 (ns cljdekiq.core
   (:require [taoensso.carmine :as car :refer [wcar]]
-            [clojure.data.json :as json]))
+            [clojure.data.json :as json]
+            [cljdekiq.queue :refer :all]
+            [cljdekiq.redis :as redis]))
 
-;; Time helpers
-(defn seconds [n] (long n))
-(defn minutes [n] (long (* n 60)))
-(defn hours [n] (long (* (minutes n) 60)))
-(defn days [n] (long (* (hours n) 24)))
-(defn -now []
-  (long (/ (System/currentTimeMillis) 1000)))
+;; Re-export the time helper functions here
+(doseq [[sym v] (ns-publics 'cljdekiq.time)]
+  (intern *ns* sym v))
 
 ;; String heleprs
 (defn capitalized? [s]
@@ -51,15 +49,12 @@
        (remove nil? (conj ns-parts ruby-name))))))
 
 (defn conn
-  ;; Automatically create a redis pool using localhost.
+  ;; Automatically create a redis queue using localhost.
   ([]
-   (let [conn-pool (car/connection-pool {})
-         conn-spec {:uri "redis://localhost:6379/"}
-         wcar-opts {:pool conn-pool, :spec conn-spec}]
-     (conn wcar-opts)))
+   (conn (redis/->RedisQueueWithDefaults)))
 
-  ([redis]
-   {:workers [] :redis redis}))
+  ([queue]
+   {:workers [] :queue queue}))
 
 (defn worker [name-or-fn & {:as options}]
   (let [options (or options {})
@@ -116,32 +111,6 @@
     ;; Update the conn state.
     (assoc conn :workers (conj workers worker))))
 
-(defn poll-for-work [conn queues]
-  (wcar (:redis conn)
-        ;; This looks like (brpop :q1 :q2 :q3 5) when eval'd
-        (apply car/brpop (conj queues 5))))
-
-(defn push-job [conn job]
-  (wcar (:reds conn)
-        (car/lpush
-          ;; Set the work queue from job or use default.
-         (or (:queue job) :default)
-         (json/write-str job))))
-
-(defn push-schedule [conn job enqueue-at]
-  (wcar (:reds conn)
-        (car/zadd
-         :schedule
-         enqueue-at
-         (json/write-str job))))
-
-(defn push-retry [conn job retry-at]
-  (wcar (:reds conn)
-        (car/zadd
-         :retry
-         retry-at
-         (json/write-str job))))
-
 (defn -retry-delay-secs [n]
   (+ (Math/pow n 4)
      15
@@ -150,12 +119,12 @@
 
 ;; Assumed retries are allowed to happen if called.
 (defn -retry [conn job err]
-  (let [retry (:retry job)
+  (let [retry-value (:retry job)
         max-retries (or
                       ;; Check for a specified number
-                     (if (int? retry) retry)
+                     (if (int? retry-value) retry-value)
                       ;; Check for a "true" value so we can use default.
-                     (if (boolean? retry) 25))
+                     (if (boolean? retry-value) 25))
 
         ;; Check number of times job has retries so far.
         retry-count (or (:retry_count job) 0)
@@ -169,50 +138,19 @@
         new-job (assoc job
                        :retry_count (inc retry-count)
                        ;; Failed at should only be set on the first failure.
-                       :failed_at (or (:failed_at job) (-now))
-                       :retried_at (-now)
+                       :failed_at (or (:failed_at job) (now))
+                       :retried_at (now)
                        :error_message err-msg
                        :error_class err-class
                        :error_backtrace err-stacktrace)
 
         ;; Compute the time we'll retry the job.
-        retry-at (+ (-now)
+        retry-at (+ (now)
                     (-retry-delay-secs (inc retry-count)))]
 
     ;; Insert the job if the max retries have not exceeded.
     (if (< retry-count max-retries)
-      (push-retry conn new-job retry-at))))
-
-(defn -enqueue-scheduled [conn key]
-  (let [items (wcar (:redis conn)
-                    (car/zrangebyscore key "-inf" (-now) "limit" 0 10))]
-
-    ;; We have a list of items that we need to delete from the range and
-    ;; re-enqueue to run immediately.
-    (doseq [item items]
-      (let [n-removed (wcar (:redis conn) (car/zrem key item))
-            job (json/read-str item :key-fn keyword)]
-
-        ;; Rely on ZREM to tell us if we're the lucky proc that actually
-        ;; removed it from redis. If so, then add. Else, skip.
-        (if (not (zero? n-removed))
-          (push-job conn job))))))
-
-;;(defn -enqueue-retries [conn]
-;;  (let [
-;;        retries (wcar (:redis conn)
-;;                      (car/zrangebyscore :retry "-inf" (-now) "limit" 0 10))]
-;;
-;;    ;; We have a list of items that we need to delete from the range and
-;;    ;; re-enqueue to run immediately.
-;;    (doseq [retry retries]
-;;      (let [n-removed (wcar (:redis conn) (car/zrem :retry retry))
-;;            job (json/read-str retry :key-fn keyword)]
-;;
-;;        ;; Rely on ZREM to tell us if we're the lucky proc that actually
-;;        ;; removed it from redis. If so, then add. Else, skip.
-;;        (if (not (zero? n-removed))
-;;          (push-job conn job))))))
+      (retry (:queue conn) new-job retry-at))))
 
 (defn -invoke [conn worker job]
   (let [job-fn (:job-fn worker)
@@ -230,7 +168,7 @@
             (-retry conn job e)))))))
 
 (defn -poll-once [conn queues class-to-worker]
-  (let [[queue job-data] (poll-for-work conn queues)
+  (let [[queue job-data] (poll (:queue conn) queues)
         job (if (string? job-data)
               ;; TODO: Reject bad json strings so as to not raise.
               (json/read-str job-data :key-fn keyword))
@@ -277,12 +215,8 @@
 
         ;; Build a fn for polling the retry and schedule sets.
         poll-sets (fn []
-                    ;; Move jobs in the retry set.
-                    (-enqueue-scheduled conn :retry)
-                    ;; Move jobs in the schedule set.
-                    (-enqueue-scheduled conn :schedule)
-                    ;; Sleep a bit to avoid churn on redis.
-                    (Thread/sleep 5000))
+                    (Thread/sleep
+                     (* 1000 (tick (:queue conn)))))
         ;; Build a fn to poll queues. Memo conn state for fast lookups.
         poll-queues (-poll-queues conn)
 
@@ -314,17 +248,17 @@
                  :args (or args [])
                  :retry (or (:retries worker) true)
                  :retry_count 0
-                 :created_at (-now)
-                 :enqueued_at (-now)}]
+                 :created_at (now)
+                 :enqueued_at (now)}]
     job-map))
 
 (defn perform-async [conn worker-or-fn & args]
-  (push-job conn (apply new-job worker-or-fn args)))
+  (push (:queue conn) (apply new-job worker-or-fn args)))
 
 (defn perform-in [conn worker-or-fn seconds & args]
-  (push-schedule conn
-                 (apply new-job worker-or-fn args)
-                 (+ (-now) seconds)))
+  (schedule (:queue conn)
+            (apply new-job worker-or-fn args)
+            (+ (now) seconds)))
 
 (comment
   ;; Server
