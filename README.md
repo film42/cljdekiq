@@ -136,7 +136,8 @@ By default, cljdekiq will create a `carmine` redis pool pointed at localhost.
 When you `run` your app, you need to make sure you keep the returned value. Running the server will not block your application. Instead, it returns a stop function that you can call when you want cljdekiq to shut down. This make take several seconds since the server will attempt to wait for any running jobs to complete.
 
 ```clojure
-(def app (ck/conn (ck/register send-email)))
+;; Create your app.
+(def app (->> (ck/conn) (ck/register send-email)))
 
 ;; Start the server.
 (def stop (ck/run app))
@@ -154,12 +155,11 @@ You should now have all the information you need to use this library.
 
 ### Tasks
 
-1. Abstract redis
-2. Add sidekiq-rs optimizations
-3. Middleware
-4. Using `core.async` maybe
-5. Sidekiq-rs crons
-6. Dynamo/Firestore/Postgres backend
+1. Add sidekiq-rs optimizations
+2. Middleware
+3. Using `core.async` maybe
+4. Sidekiq-rs crons
+5. Dynamo/Firestore/Postgres backend
 
 ### TODO
 
@@ -170,7 +170,7 @@ You should now have all the information you need to use this library.
 
 ## License
 
-Copyright © 2025 FIXME
+Copyright © 2025 Comfy Soft
 
 This program and the accompanying materials are made available under the
 terms of the Eclipse Public License 2.0 which is available at
