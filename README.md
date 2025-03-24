@@ -16,11 +16,12 @@ Cljdekiq does the same thing. First, define your function. And from here you can
 (defn send-email [user-id] ...)
 
 (defn main []
- (def stop (->> (ck/conn)
-            (ck/register send-email)
-            (ck/run)))
+ (def app (->> (ck/conn)
+            (ck/register send-email)))
 
- (ck/perform-async send-email "user-123")
+ (def stop (ck/run))
+
+ (ck/perform-async app send-email "user-123")
 
  (stop))
 ```
@@ -152,6 +153,10 @@ You should now have all the information you need to use this library.
 
 
 ## Maintainer's Brain
+
+The API feels good to work with, so I don't expect major changes. But, I do think some of the function names could be improved. Like `(ck/run conn)` is good but doesn't fully convey that this is a server with background threads that you must stop later.
+
+All to say, anticipate breaking changes, but expect them to be simple to fix.
 
 ### Tasks
 
