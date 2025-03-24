@@ -1,5 +1,6 @@
 (ns cljdekiq.example
-  (:require [cljdekiq.core :as ck]))
+  (:require [cljdekiq.core :as ck]
+            [cljdekiq.queue :as cq]))
 
 (defn scan-for-phi []
   (Thread/sleep 1000)
@@ -48,5 +49,9 @@
 
   (println "Shutting down...")
   (stop)
+  ;; Optional: Clean up queue (in this case, close the redis pool)
+  (cq/close (ck/queue app))
+  (println "Done")
 
-  (println "Done"))
+  ;; Extra for a demo: shutdown agents so lein run exits cleanly.
+  (shutdown-agents))

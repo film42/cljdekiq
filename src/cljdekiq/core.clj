@@ -56,6 +56,9 @@
   ([queue]
    {:workers [] :queue queue}))
 
+(defn queue [conn]
+  (:queue conn))
+
 (defn worker [name-or-fn & {:as options}]
   (let [options (or options {})
         class-name (or

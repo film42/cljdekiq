@@ -71,7 +71,10 @@
     (push-retry (:conn this) job retry-at))
 
   (schedule [this job enqueue-at]
-    (push-schedule (:conn this) job enqueue-at)))
+    (push-schedule (:conn this) job enqueue-at))
+
+  (close [this]
+    (.close (:pool (:conn this)))))
 
 (defn ->RedisQueueWithDefaults []
   (let [conn-pool (car/connection-pool {})
