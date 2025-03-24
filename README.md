@@ -109,6 +109,48 @@ To create a job to run at some later date, you can use `perform-in`. It works _a
 (ck/perform-in "SyncHubspotChangesWorker" (ck/minutes 1) "user-999")
 ```
 
+The developer experience is great with Cljdekick. It's very easy to turn your plain old functions into a Sidekiq job. Running work together has never been easier!
+
+Now let's look at configuring the server to connect to redis, starting it, and stopping it.
+
+By default, cljdekiq will create a `carmine` redis pool pointed at localhost.
+
+```clojure
+;; Create a redis pool pointed at localhost
+(ck/conn)
+
+;; Specify a custom redis path.
+;; First we'll copy/ paste the carmine getting started example
+(defonce my-conn-pool (car/connection-pool {}))
+(def my-conn-spec {:uri "redis://myuser:pass@my-redis-host:1234/"})
+(def my-wcar-opts {:pool my-conn-pool, :spec my-conn-spec})
+
+;; Cljdekiq abstracts the redis parts into its own defrecord, which
+;; is very easy to create using your carmine pool.
+(def queue (cr/->RedisQueue my-wcar-opts))
+
+;; Then you can pass your new queue as an argument to the conn function.
+(ck/conn queue)
+```
+
+When you `run` your app, you need to make sure you keep the returned value. Running the server will not block your application. Instead, it returns a stop function that you can call when you want cljdekiq to shut down. This make take several seconds since the server will attempt to wait for any running jobs to complete.
+
+```clojure
+(def app (ck/conn (ck/register send-email)))
+
+;; Start the server.
+(def stop (ck/run app))
+
+;; You can perform any other code you want here!
+
+;; When you're ready, stop the server.
+(stop)
+```
+
+You should now have all the information you need to use this library.
+
+
+## Maintainer's Brain
 
 ### Tasks
 
