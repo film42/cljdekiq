@@ -5,6 +5,12 @@ Pronounced "clide-kick" is a client and server implementation of Sidekiq. This l
 
 ## Usage
 
+You can grab cljdekiq from clojars.
+
+```
+[com.github.comfysoft/cljdekiq "0.1.0-SNAPSHOT"]
+```
+
 Sidekiq in ruby is a wonderful piece of software. It starts with you defining a `perform` function and extending the `Sidekiq::Worker` class to create a job system around your function. Feels very clojure-y!
 
 Cljdekiq does the same thing. First, define your function. And from here you can start a server and push work.
