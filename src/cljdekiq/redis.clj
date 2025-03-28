@@ -9,9 +9,14 @@
 ;;
 
 (defn poll-for-work [conn queues]
-  (wcar conn
-        ;; This looks like (brpop :q1 :q2 :q3 5) when eval'd
-        (apply car/brpop (conj queues 5))))
+  (let [[queue job-data] (wcar conn
+                               ;; This looks like (brpop :q1 :q2 :q3 5) when eval'd
+                               (apply car/brpop (conj queues 5)))
+        ;; We store in redis as json. Attempt to hydrate if there is a string present.
+        job (if (string? job-data)
+              (json/read-str job-data :key-fn keyword))]
+
+    [queue job]))
 
 (defn push-job [conn job]
   (wcar conn
@@ -81,3 +86,6 @@
         conn-spec {:uri "redis://localhost:6379/"}
         wcar-opts {:pool conn-pool, :spec conn-spec}]
     (->RedisQueue wcar-opts)))
+
+(defn redis-queue []
+  (->RedisQueueWithDefaults))

@@ -1,6 +1,5 @@
 (ns cljdekiq.core
   (:require [taoensso.carmine :as car :refer [wcar]]
-            [clojure.data.json :as json]
             [cljdekiq.queue :refer :all]
             [cljdekiq.redis :as redis]))
 
@@ -171,14 +170,10 @@
             (-retry conn job e)))))))
 
 (defn -poll-once [conn queues class-to-worker]
-  (let [[queue job-data] (poll (:queue conn) queues)
-        job (if (string? job-data)
-              ;; TODO: Reject bad json strings so as to not raise.
-              (json/read-str job-data :key-fn keyword))
+  (let [[queue job] (poll (:queue conn) queues)
         worker (get class-to-worker (:class job))]
 
     (comment
-      (clojure.pprint/pprint job-data)
       (clojure.pprint/pprint queue)
       (clojure.pprint/pprint job)
       (clojure.pprint/pprint worker))

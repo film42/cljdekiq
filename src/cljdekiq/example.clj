@@ -1,6 +1,7 @@
 (ns cljdekiq.example
   (:require [cljdekiq.core :as ck]
-            [cljdekiq.queue :as cq]))
+            [cljdekiq.queue :as cq]
+            [cljdekiq.redis :as cr]))
 
 (defn scan-for-phi []
   (Thread/sleep 1000)
@@ -23,10 +24,10 @@
    :queue :other
    :retry false))
 
-(defn run []
+(defn run-with-queue [queue]
   (println "Building app")
   (def app
-    (-> (ck/conn)
+    (-> (ck/conn queue)
         (ck/register scan-for-phi :queue :tasks)
         (ck/register welcome-email :retry false)
         (ck/register error-worker)
@@ -37,11 +38,9 @@
 
   (println "Adding work...")
   (ck/perform-async app scan-for-phi)
-
   (ck/perform-async app welcome-email "user-1")
-
   (ck/perform-async app error-worker)
-
+  (println "Scheduling work...")
   (ck/perform-in app anon-worker (ck/seconds 6) 1 2 3)
 
   (println "Running server for 5 seconds.")
@@ -49,9 +48,18 @@
 
   (println "Shutting down...")
   (stop)
+
   ;; Optional: Clean up queue (in this case, close the redis pool)
   (cq/close (ck/queue app))
-  (println "Done")
+
+  (println "Done"))
+
+(defn run []
+  (println "Running with the redis backed queue (sidekiq mode)")
+  (run-with-queue (cr/redis-queue))
+
+  (println "Running with an in-mempory test queue (pluggable backends)")
+  (run-with-queue (cq/test-queue))
 
   ;; Extra for a demo: shutdown agents so lein run exits cleanly.
   (shutdown-agents))
