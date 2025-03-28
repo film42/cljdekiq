@@ -1,6 +1,6 @@
 # cljdekiq
 
-Pronounced "clide-kick" is a client and server implementation of Sidekiq. This library is intended to be used along side a ruby app. Meaning, you can enqueue and run jobs from clojure, run jobs enqueued by a ruby app, or enqueue Sidekiq jobs to your ruby app. It all works!
+Pronounced "clyde-kick" is a client and server implementation of Sidekiq. This library is intended to be used along side a ruby app. Meaning, you can enqueue and run jobs from clojure, run jobs enqueued by a ruby app, or enqueue Sidekiq jobs to your ruby app. It all works!
 
 
 ## Usage
@@ -156,6 +156,25 @@ When you `run` your app, you need to make sure you keep the returned value. Runn
 ```
 
 You should now have all the information you need to use this library.
+
+
+## Bring your own queue
+
+Cljdekiq uses a `Queue` protocol to make the underlying queue swappable. For ruby intertop and multi-process coordination you should use the provided redis queue (it's also the default queue). If you just need something bare-bones that runs in memory, you can use the `cljdekiq.queue/test-queue`. And if you want to get really clever, you can implement your own queue. Here is a current snapshot of the `Queue` protocol.
+
+```clojure
+(defprotocol Queue
+  "A generic interface over the stateful queue semantics."
+
+  (tick [this] "Called every N seconds to allow the queue to advance internal machinery. Returns the next ticket delay in seconds.")
+  (poll [this queues] "Poll for new work. Called repeatedly. Can return [] or nil to indicate no work available.")
+  (push [this job] "Insert a new job. Use the job map to infer all routing logic.")
+  (retry [this job retry-at] "Retry a job")
+  (schedule [this job enqueue-at] "Similar to push but for scheduling a job in the future.")
+  (close [this] "Clean up any of the queue components."))
+```
+
+Want to contribute a backend? Open a pull request. I'd love to see what you come up with! Need some inspiration? I think Google's Firestore, Amazon's DynamoDB, and SQL (Sqlite or Postgres) could be fun to implement. Go crazy!
 
 
 ## Maintainer's Brain
