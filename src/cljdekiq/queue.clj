@@ -34,6 +34,14 @@
     ;; Return the (maybe) found element.
     @res))
 
+;; Helper fn to push an item into a sorted-set-backed-atom. A sorted set is just
+;; a map with :job and :at keys; sorted by the :at key.
+(defn swap-conj-sorted-set! [atm job at]
+  (swap! atm (fn [coll]
+               (->>
+                (conj coll {:at at :job job})
+                (sort-by :at)))))
+
 ;; Take the main in-mem job queue, look to see if a job matches one of the
 ;; provided queue names. The set of queues should be an actual set of strings.
 ;; If a job is found, it will be captured and returned. Uses swap! to be thread
@@ -90,18 +98,12 @@
     job)
 
   (retry [this job retry-at]
-    (swap! (:retry this) (fn [coll]
-                           (->>
-                            (conj coll {:at retry-at :job job})
-                            (sort-by :at))))
+    (swap-conj-sorted-set! (:retry this) job retry-at)
 
     job)
 
   (schedule [this job enqueue-at]
-    (swap! (:scheduled this) (fn [coll]
-                               (->>
-                                (conj coll {:at enqueue-at :job job})
-                                (sort-by :at))))
+    (swap-conj-sorted-set! (:scheduled this) job enqueue-at)
 
     job)
 
