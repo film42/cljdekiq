@@ -5,168 +5,151 @@
             [cljdekiq.queue :as cq]
             [cljdekiq.time :refer :all]))
 
-(def spec
-  {:adapter "sqlite"
-   :url "jdbc:sqlite::memory:"
-   ;; Only allow one connection to the in-memory db
-   :idle-timeout 0
-   :maximum-pool-size 1})
+(def schema
+  [;; Main job queue. The composite index on (queue, perform_at) covers
+   ;; the pop query: WHERE queue IN (...) AND perform_at <= ? ORDER BY id.
+   ;; Since id is the rowid (INTEGER PRIMARY KEY), it's implicitly part of
+   ;; every index, so the subquery in pop-job is an index-only scan.
+   "CREATE TABLE IF NOT EXISTS jobs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      perform_at INTEGER NOT NULL,
+      queue TEXT NOT NULL,
+      data TEXT NOT NULL
+    )"
+   "CREATE INDEX IF NOT EXISTS idx_jobs_queue_perform_at ON jobs (queue, perform_at)"
 
-(def db (hikari/make-datasource spec))
+   ;; Scheduled and retry jobs share one table, distinguished by label.
+   ;; Ticked every second — index on enqueue_at so the range scan is fast.
+   "CREATE TABLE IF NOT EXISTS scheduled (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      enqueue_at INTEGER NOT NULL,
+      queue TEXT NOT NULL,
+      label TEXT NOT NULL,
+      data TEXT NOT NULL
+    )"
+   "CREATE INDEX IF NOT EXISTS idx_scheduled_enqueue_at ON scheduled (enqueue_at)"])
 
-(def schema ["CREATE TABLE IF NOT EXISTS jobs (
-             		id INTEGER PRIMARY KEY AUTOINCREMENT,
-                 perform_at INTEGER,
-                 queue TEXT,
-                 data TEXT
-             )"
-
-             "CREATE TABLE IF NOT EXISTS retries (
-             		id INTEGER PRIMARY KEY AUTOINCREMENT,
-                 retry_at INTEGER,
-                 queue TEXT,
-                 data TEXT
-             )"
-
-             "CREATE TABLE IF NOT EXISTS scheduled (
-             		id INTEGER PRIMARY KEY AUTOINCREMENT,
-                 enqueue_at INTEGER,
-                 queue TEXT,
-                 data TEXT
-             )"])
-
-(defn init-db [db]
+(defn init-db
+  "Initialize the queue schema on an existing datasource. Safe to call
+   repeatedly — uses IF NOT EXISTS. Returns the datasource."
+  [db]
   (jdbc/with-transaction [tx db]
     (doseq [s schema]
       (jdbc/execute! tx [s])))
 
   db)
 
-
 (defn insert-job [db queue job-json]
-  (jdbc/execute! db ["insert into jobs (data, queue, perform_at) values (?, ?, ?)"
+  (jdbc/execute! db ["INSERT INTO jobs (data, queue, perform_at) VALUES (?, ?, ?)"
                      job-json
                      queue
                      (now)]))
 
-(defn schedule-job [db queue job-json at]
-  (jdbc/execute! db ["insert into scheduled_jobs (data, queue, enqueue_at) values (?, ?, ?)"
-                     job-json
-                     queue
-                     at]))
+(defn schedule-job
+  ([db queue job-json enqueue-at]
+   (schedule-job db queue job-json enqueue-at "scheduled"))
+
+  ([db queue job-json enqueue-at label]
+   (jdbc/execute! db ["INSERT INTO scheduled (data, queue, enqueue_at, label) VALUES (?, ?, ?, ?)"
+                      job-json
+                      queue
+                      enqueue-at
+                      label])))
 
 (defn retry-job [db queue job-json at]
-  (jdbc/execute! db ["insert into retries_jobs (data, queue, retry_at) values (?, ?, ?)"
-                     job-json
-                     queue
-                     at]))
+  (schedule-job db queue job-json at "retry"))
 
 (defn pop-job [db queues]
-  (let [queues-? (clojure.string/join ", "
-                                      (repeat (count queues) "?"))
-        bindings (conj queues (now))
-        query (str
-               "delete from jobs where id in (
-                  select id from jobs where queue in (" queues-? ") and perform_at < ? order by id asc limit 1
-                ) returning *")
-
-    job (jdbc/execute-one! db (concat [query] bindings))]
-
-    (println job)
+  (let [queue-names (mapv name queues)
+        placeholders (clojure.string/join ", " (repeat (count queue-names) "?"))
+        ;; Uses the idx_jobs_queue_perform_at index to find the oldest
+        ;; eligible job, then deletes by rowid (fast point delete).
+        query (str "DELETE FROM jobs WHERE id = ("
+                   "SELECT id FROM jobs WHERE queue IN (" placeholders ") "
+                   "AND perform_at <= ? ORDER BY perform_at ASC, id ASC LIMIT 1"
+                   ") RETURNING *")
+        bindings (conj queue-names (now))
+        job (jdbc/execute-one! db (concat [query] bindings))]
 
     (if (some? job)
-      [(:jobs/queue job) (:jobs/data job)]
+      [(:jobs/queue job)
+       (json/read-str (:jobs/data job) :key-fn keyword)]
 
       [nil nil])))
 
-(defn enqueue-retries [db]
-  (jdbc/with-transaction [tx db]
-    (let [right-now (now)
-          retried-ids (jdbc/execute! tx [(str
-                                           "with to_retry as (select id, queue, data from retries where retry_at <= ? order by id asc)"
-                                           "insert into jobs (queue, data) select queue, data from to_retry")
-                                         right-now])]
-
-      (jdbc/execute! tx ["delete from retries where retry_at <= ?" right-now]))))
-
 (defn enqueue-scheduled [db]
   (jdbc/with-transaction [tx db]
-    (let [right-now (now)
-          retried-ids (jdbc/execute! tx [(str
-                                           "with to_sched as (select id, queue, data from scheduled where enqueue_at <= ? order by id asc)"
-                                           "insert into jobs (queue, data) select queue, data from to_sched")
-                                         right-now])]
+    (let [right-now (now)]
+      ;; Move ready scheduled/retry jobs into the main queue.
+      ;; Uses idx_scheduled_enqueue_at for the range scan.
+      (jdbc/execute! tx ["INSERT INTO jobs (queue, data, perform_at)
+                          SELECT queue, data, enqueue_at
+                          FROM scheduled WHERE enqueue_at <= ?
+                          ORDER BY id ASC"
+                         right-now])
 
-      (jdbc/execute! tx ["delete from scheduled where enqueue_at <= ?" right-now]))))
-
-
-(enqueue-retries db)
-(enqueue-scheduled db)
-
-(jdbc/execute! db ["insert into retries (queue, data, retry_at) values (?, ?, ?)"
-                   "default"
-                   "{}"
-                  (- (now) 1000)])
-
-(jdbc/execute! db ["select * from retries"])
-(jdbc/execute! db ["select * from jobs"])
-
-
-(insert-job db "default" "{\"test\": \"ok\"")
-(insert-job db "other" "{\"test\": \"ok\"")
-
-(jdbc/with-transaction [tx db]
-  (jdbc/execute! tx [(nth schema 0)]))
-
-(jdbc/with-transaction [tx db]
-  (jdbc/execute! tx ["select * from jobs where queue in (?, ?) order by id desc limit 1"
-                     "default"
-                     "other"]))
-
+      (jdbc/execute! tx ["DELETE FROM scheduled WHERE enqueue_at <= ?" right-now]))))
 
 (defrecord SqliteQueue [db]
   cq/Queue
 
   (tick [this]
-    (enqueue-retries (:db this))
     (enqueue-scheduled (:db this))
-
     1)
 
   (poll [this queues]
     (pop-job (:db this) (vec queues)))
 
   (push [this job]
-    (insert-job (:db this) (:queue job) job)
-
+    (insert-job (:db this) (name (:queue job)) (json/write-str job))
     job)
 
   (retry [this job retry-at]
-    (retry-job (:db this) job retry-at)
-
+    (retry-job (:db this) (name (:queue job)) (json/write-str job) retry-at)
     job)
 
   (schedule [this job enqueue-at]
-    (schedule-job (:db this) job enqueue-at)
-
+    (schedule-job (:db this) (name (:queue job)) (json/write-str job) enqueue-at)
     job)
 
-  (close [this]))
+  (close [this]
+    (when (instance? java.io.Closeable (:db this))
+      (.close (:db this)))))
+
+(defn- ->datasource [path]
+  (let [in-mem (= path ":memory:")]
+    (hikari/make-datasource
+      (cond-> {:adapter "sqlite"
+               :url (str "jdbc:sqlite:" path)}
+        in-mem (assoc :idle-timeout 0 :maximum-pool-size 1)))))
+
+(defn sqlite-queue
+  "Pass a path string for simple mode, or a datasource for full control.
+   (sqlite-queue \":memory:\")
+   (sqlite-queue \"./jobs.db\")
+   (sqlite-queue my-hikari-datasource)"
+  [path-or-datasource]
+  (let [db (if (string? path-or-datasource)
+             (->datasource path-or-datasource)
+             path-or-datasource)]
+    (->SqliteQueue (init-db db))))
 
 (comment
 
-  (let [q (->SqliteQueue (init-db db))]
-    ;(cq/push q {:queue "default"})
-    ;(cq/push q {:queue "default"})
-    (cq/push q {:queue "default"})
+  ;; Simple — in-memory
+  (def q (sqlite-queue ":memory:"))
 
-    (println (cq/poll q ["testing"]))
-    (println (cq/poll q ["default"]))
+  ;; Simple — on-disk
+  (def q (sqlite-queue "./my-jobs.db"))
 
-    )
+  ;; Full control — bring your own datasource
+  (def ds (hikari/make-datasource
+            {:adapter "sqlite"
+             :url "jdbc:sqlite:./my-jobs.db"
+             :maximum-pool-size 4}))
+  (jdbc/execute! ds ["PRAGMA journal_mode=WAL"])
+  (def q (sqlite-queue ds))
 
-  (jdbc/execute! db ["select * from jobs"])
-
-
-
-)
+  (cq/push q {:queue :default :class "TestWorker" :args [1 2 3]})
+  (cq/poll q ["default"])
+  (cq/close q))

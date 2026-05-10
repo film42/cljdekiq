@@ -160,7 +160,56 @@ You should now have all the information you need to use this library.
 
 ## Bring your own queue
 
-Cljdekiq uses a `Queue` protocol to make the underlying queue swappable. For ruby intertop and multi-process coordination you should use the provided redis queue (it's also the default queue). If you just need something bare-bones that runs in memory, you can use the `cljdekiq.queue/test-queue`. And if you want to get really clever, you can implement your own queue. Here is a current snapshot of the `Queue` protocol.
+Cljdekiq uses a `Queue` protocol to make the underlying queue swappable. There are three built-in backends:
+
+- **Redis** (default) -- For Ruby interop and multi-process coordination. This is what you want if you're working alongside a Rails app.
+- **SQLite** -- A durable, embedded queue with no infrastructure dependencies. Great for single-process services, CLI tools, or when you don't want to run Redis.
+- **TestQueue** -- An in-memory queue backed by atoms. Fast, no deps, good for tests.
+
+### SQLite queue
+
+The SQLite backend stores jobs in a local database file. Pass a path for simple setup, or bring your own datasource for full control over connection pooling and pragmas.
+
+```clojure
+(ns my.app
+  (:require [cljdekiq.core :as ck]
+            [cljdekiq.sqlite :as sq]))
+
+(defn send-email [user-id] ...)
+
+;; Simple — just a file path
+(def app
+  (-> (ck/conn (sq/sqlite-queue "./jobs.db"))
+      (ck/register send-email)))
+
+;; In-memory (good for tests)
+(def app
+  (-> (ck/conn (sq/sqlite-queue ":memory:"))
+      (ck/register send-email)))
+
+;; Full control — bring your own datasource
+(require '[hikari-cp.core :as hikari])
+
+(def ds (hikari/make-datasource
+          {:adapter "sqlite"
+           :url "jdbc:sqlite:./jobs.db"
+           :maximum-pool-size 4}))
+
+;; Set whatever pragmas you want
+(require '[next.jdbc :as jdbc])
+(jdbc/execute! ds ["PRAGMA journal_mode=WAL"])
+(jdbc/execute! ds ["PRAGMA busy_timeout=5000"])
+
+(def app
+  (-> (ck/conn (sq/sqlite-queue ds))
+      (ck/register send-email)))
+```
+
+Everything else works the same — `perform-async`, `perform-in`, `run`, `stop`. The queue is just a backend detail.
+
+### Custom queue
+
+If you want to implement your own backend, here is the `Queue` protocol:
 
 ```clojure
 (defprotocol Queue
@@ -174,7 +223,7 @@ Cljdekiq uses a `Queue` protocol to make the underlying queue swappable. For rub
   (close [this] "Clean up any of the queue components."))
 ```
 
-Want to contribute a backend? Open a pull request. I'd love to see what you come up with! Need some inspiration? I think Google's Firestore, Amazon's DynamoDB, and SQL (Sqlite or Postgres) could be fun to implement. Go crazy!
+Want to contribute a backend? Open a pull request!
 
 
 ## Maintainer's Brain
@@ -189,7 +238,7 @@ All to say, anticipate breaking changes, but expect them to be simple to fix.
 2. Middleware
 3. Using `core.async` maybe
 4. Sidekiq-rs crons
-5. Dynamo/Firestore/Postgres backend
+5. Postgres backend
 
 ### TODO
 
