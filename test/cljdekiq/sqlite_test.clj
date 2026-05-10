@@ -1,8 +1,9 @@
 (ns cljdekiq.sqlite-test
-  (:require [clojure.test :refer :all]
+  (:require [clojure.test :refer [deftest is testing]]
             [cljdekiq.sqlite :as sq]
-            [cljdekiq.queue :refer :all]
-            [cljdekiq.core :as ck]))
+            [cljdekiq.queue :as cq]
+            [cljdekiq.core :as ck]
+            [cljdekiq.time :as ct]))
 
 (defn example-worker1 [])
 (defn example-worker2 [])
@@ -16,7 +17,7 @@
 
       (ck/perform-async app (ck/worker example-worker1 :queue :one))
 
-      (let [[queue job] (poll q [:one :two])
+      (let [[queue job] (cq/poll q [:one :two])
             static-keys (select-keys job [:class :queue :args :retry :retry_count])]
 
         (is (= queue "one"))
@@ -36,41 +37,41 @@
     (let [q (sq/sqlite-queue ":memory:")
           app (-> (ck/conn q)
                   (ck/register example-worker1 :queue :one))
-          job (ck/perform-in app (ck/worker example-worker1 :queue :one) (ck/seconds 1))]
+          _job (ck/perform-in app (ck/worker example-worker1 :queue :one) (ct/seconds 1))]
 
       ;; Job should not be in the main queue yet
-      (let [[queue polled-job] (poll q ["one"])]
+      (let [[queue polled-job] (cq/poll q ["one"])]
         (is (nil? queue))
         (is (nil? polled-job)))
 
       (Thread/sleep 1100)
-      (tick q)
+      (cq/tick q)
 
       ;; Now it should be available
-      (let [[queue polled-job] (poll q ["one"])]
+      (let [[queue polled-job] (cq/poll q ["one"])]
         (is (= queue "one"))
         (is (= (:class polled-job) "Cljdekiq::SqliteTest::ExampleWorker1"))))))
 
 (deftest it-can-retry-a-job
   (testing "retried jobs are moved to the main queue after their retry_at time"
     (let [q (sq/sqlite-queue ":memory:")
-          app (-> (ck/conn q)
-                  (ck/register example-worker1 :queue :one))
+          _app (-> (ck/conn q)
+                   (ck/register example-worker1 :queue :one))
           worker (ck/worker example-worker1 :queue :one)
           job (ck/new-job worker)
-          retry-at (+ (ck/now) (ck/seconds 1))]
+          retry-at (+ (ct/now) (ct/seconds 1))]
 
-      (retry q job retry-at)
+      (cq/retry q job retry-at)
 
       ;; Should not be available yet
-      (let [[queue polled-job] (poll q ["one"])]
+      (let [[queue _polled-job] (cq/poll q ["one"])]
         (is (nil? queue)))
 
       (Thread/sleep 1100)
-      (tick q)
+      (cq/tick q)
 
       ;; Now it should be available
-      (let [[queue polled-job] (poll q ["one"])]
+      (let [[queue polled-job] (cq/poll q ["one"])]
         (is (= queue "one"))
         (is (= (:class polled-job) "Cljdekiq::SqliteTest::ExampleWorker1"))))))
 
@@ -82,7 +83,7 @@
 
       (ck/perform-async app (ck/worker example-worker1 :queue :one))
 
-      (let [[queue job] (poll q ["one"])]
+      (let [[queue job] (cq/poll q ["one"])]
         (is (= queue "one"))
         (is (= (:class job) "Cljdekiq::SqliteTest::ExampleWorker1")))))
 
@@ -92,6 +93,6 @@
 
       (ck/perform-async app (ck/worker example-worker1 :queue :some-other-queue))
 
-      (let [[queue job] (poll q ["one"])]
+      (let [[queue job] (cq/poll q ["one"])]
         (is (nil? queue))
         (is (nil? job))))))

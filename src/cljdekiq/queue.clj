@@ -107,7 +107,7 @@
 
     job)
 
-  (close [this]))
+  (close [_this]))
 
 (defn test-queue []
   ;; A bunch of atoms of empt lists for queue-like behavior.

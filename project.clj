@@ -11,4 +11,6 @@
                  [hikari-cp "3.2.0"]
                  [com.github.seancorfield/next.jdbc "1.3.1002"]
                  [org.xerial/sqlite-jdbc "3.49.1.0"]]
+  :plugins [[dev.weavejester/lein-cljfmt "0.13.0"]
+             [com.github.clj-kondo/lein-clj-kondo "2024.08.01"]]
   :repl-options {:init-ns cljdekiq.core})

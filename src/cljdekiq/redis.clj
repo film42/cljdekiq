@@ -2,7 +2,7 @@
   (:require [taoensso.carmine :as car :refer [wcar]]
             [clojure.data.json :as json]
             [cljdekiq.queue :as cq]
-            [cljdekiq.time :refer :all]))
+            [cljdekiq.time :refer [now]]))
 
 ;;
 ;; Redis Impl

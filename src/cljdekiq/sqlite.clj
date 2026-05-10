@@ -2,8 +2,9 @@
   (:require [next.jdbc :as jdbc]
             [hikari-cp.core :as hikari]
             [clojure.data.json :as json]
+            [clojure.string :as str]
             [cljdekiq.queue :as cq]
-            [cljdekiq.time :refer :all]))
+            [cljdekiq.time :refer [now]]))
 
 (def schema
   [;; Main job queue. The composite index on (queue, perform_at) covers
@@ -61,7 +62,7 @@
 
 (defn pop-job [db queues]
   (let [queue-names (mapv name queues)
-        placeholders (clojure.string/join ", " (repeat (count queue-names) "?"))
+        placeholders (str/join ", " (repeat (count queue-names) "?"))
         ;; Uses the idx_jobs_queue_perform_at index to find the oldest
         ;; eligible job, then deletes by rowid (fast point delete).
         query (str "DELETE FROM jobs WHERE id = ("
@@ -119,9 +120,9 @@
 (defn- ->datasource [path]
   (let [in-mem (= path ":memory:")]
     (hikari/make-datasource
-      (cond-> {:adapter "sqlite"
-               :url (str "jdbc:sqlite:" path)}
-        in-mem (assoc :idle-timeout 0 :maximum-pool-size 1)))))
+     (cond-> {:adapter "sqlite"
+              :url (str "jdbc:sqlite:" path)}
+       in-mem (assoc :idle-timeout 0 :maximum-pool-size 1)))))
 
 (defn sqlite-queue
   "Pass a path string for simple mode, or a datasource for full control.
@@ -144,9 +145,9 @@
 
   ;; Full control — bring your own datasource
   (def ds (hikari/make-datasource
-            {:adapter "sqlite"
-             :url "jdbc:sqlite:./my-jobs.db"
-             :maximum-pool-size 4}))
+           {:adapter "sqlite"
+            :url "jdbc:sqlite:./my-jobs.db"
+            :maximum-pool-size 4}))
   (jdbc/execute! ds ["PRAGMA journal_mode=WAL"])
   (def q (sqlite-queue ds))
 

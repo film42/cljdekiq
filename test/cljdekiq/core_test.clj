@@ -1,6 +1,6 @@
 (ns cljdekiq.core-test
-  (:require [clojure.test :refer :all]
-            [cljdekiq.core :refer :all]
+  (:require [clojure.test :refer [deftest is testing]]
+            [clojure.string]
             [cljdekiq.core :as ck]))
 
 (defn whatever-dude [])
