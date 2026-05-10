@@ -1,6 +1,7 @@
 (ns cljdekiq.core
-  (:require [taoensso.carmine :as car :refer [wcar]]
-            [cljdekiq.queue :refer :all]
+  (:require [clojure.set]
+            [clojure.string]
+            [cljdekiq.queue :refer [poll push retry schedule tick]]
             [cljdekiq.redis :as redis]))
 
 ;; Re-export the time helper functions here

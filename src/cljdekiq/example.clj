@@ -1,7 +1,8 @@
 (ns cljdekiq.example
   (:require [cljdekiq.core :as ck]
             [cljdekiq.queue :as cq]
-            [cljdekiq.redis :as cr]))
+            [cljdekiq.redis :as cr]
+            [cljdekiq.time :as ct]))
 
 (defn scan-for-phi []
   (Thread/sleep 1000)
@@ -41,7 +42,7 @@
   (ck/perform-async app welcome-email "user-1")
   (ck/perform-async app error-worker)
   (println "Scheduling work...")
-  (ck/perform-in app anon-worker (ck/seconds 6) 1 2 3)
+  (ck/perform-in app anon-worker (ct/seconds 6) 1 2 3)
 
   (println "Running server for 5 seconds.")
   (Thread/sleep 5000)

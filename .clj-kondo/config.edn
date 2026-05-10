@@ -1,0 +1,16 @@
+{:linters {:missing-else-branch {:level :off}
+           :inline-def {:level :off}
+           :unresolved-var {:level :warning}}
+
+ ;; core.clj re-exports cljdekiq.time symbols via (intern), which kondo
+ ;; cannot resolve statically.
+ :config-in-ns {cljdekiq.core {:linters {:unresolved-symbol {:exclude [now seconds minutes hours days]}}}
+                cljdekiq.example {:linters {:type-mismatch {:level :off}}}}
+
+ ;; Don't lint REPL scratch in (comment ...) blocks
+ :config-in-comment {:linters {:unresolved-symbol {:level :off}
+                                :unresolved-namespace {:level :off}
+                                :unresolved-var {:level :off}
+                                :type-mismatch {:level :off}
+                                :redundant-do {:level :off}
+                                :unused-binding {:level :off}}}}
