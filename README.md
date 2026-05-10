@@ -8,7 +8,7 @@ Pronounced "clyde-kick" is a client and server implementation of Sidekiq. This l
 You can grab cljdekiq from clojars.
 
 ```
-[com.github.comfysoft/cljdekiq "0.1.0-SNAPSHOT"]
+[com.github.comfysoft/cljdekiq "0.4.0-SNAPSHOT"]
 ```
 
 Sidekiq in ruby is a wonderful piece of software. It starts with you defining a `perform` function and extending the `Sidekiq::Worker` class to create a job system around your function. Feels very clojure-y!
